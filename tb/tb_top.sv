@@ -25,7 +25,7 @@ module tb_top;
   // widths are placeholders until pkg/cpu_pkg.sv defines the real uop/ROB
   // types -- update these and the DUT hookup below together.
   // --------------------------------------------------------------------
-  localparam int RETIRE_WIDTH  = 2;   // retire ports (superscalar width)
+  localparam int RETIRE_WIDTH  = 4;   // retire ports (superscalar width); keep in sync with pkg/cpu_pkg.sv::RETIRE_WIDTH
   localparam int PC_WIDTH      = 64;
   localparam int ROB_IDX_WIDTH = 8;
 
