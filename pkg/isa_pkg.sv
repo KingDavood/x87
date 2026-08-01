@@ -312,6 +312,11 @@ package isa_pkg;
   //
   // ISA-level: one entry per instruction family, not one per uop. The uop
   // opcode enum is cpu_pkg::uop_op_e.
+  //
+  // Whether a given member here is produced by the single-cycle hardware
+  // crack or the multi-cycle microcode sequencer is a microarchitectural
+  // choice, not an architectural one -- that classification stays out of
+  // this file, in cpu_pkg::is_microcoded().
   // --------------------------------------------------------------------
   typedef enum logic [7:0] {
     X86_INVALID = 8'd0,

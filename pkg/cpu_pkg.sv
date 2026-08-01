@@ -66,6 +66,50 @@ package cpu_pkg;
   localparam int RETIRE_WIDTH    = 4;
 
   // --------------------------------------------------------------------
+  // microcode sequencer
+  //
+  // [OURS], like everything else in this file. UOPS_PER_INSN above is the
+  // ceiling for the combinational hardware crack (one x86 insn -> uops,
+  // same cycle, no ROM). A handful of instructions do more architectural
+  // work than that crack can produce in one shot -- privilege-level
+  // switches and the like -- and need a multi-cycle sequencer stepping
+  // through a microcode ROM instead. is_microcoded() below is the
+  // decode-time decision of which path an instruction takes; it lives here
+  // rather than in isa_pkg.sv because the ISA doesn't mandate microcoding
+  // anything -- it's purely an implementation choice, same as every other
+  // guess in this file.
+  //
+  // No ROM contents defined yet -- this is only the sequencer's interface
+  // shape (entry index width, per-uop control bits) so rtl/frontend has
+  // something to build against.
+  // --------------------------------------------------------------------
+  localparam int UCODE_ROM_DEPTH   = 128;  // total uop slots across all routines
+  localparam int UCODE_MAX_SEQ_LEN = 8;    // longest single routine (IRET et al.)
+  localparam int UCODE_IDX_W       = $clog2(UCODE_ROM_DEPTH);
+
+  typedef logic [UCODE_IDX_W-1:0] ucode_idx_t;
+
+  // Frontend arbitration state: who's driving the uop stream this cycle.
+  typedef enum logic {
+    UCODE_IDLE   = 1'b0,  // hardware cracker supplies uops
+    UCODE_ACTIVE = 1'b1   // sequencer is stepping through a ROM routine
+  } ucode_seq_state_e;
+
+  // [OURS] starting guess at which x86_op_e members need the sequencer
+  // instead of the hardware crack. IRET/SYSCALL/SYSRET pop and validate
+  // more state (privilege level, stack/segment switch) than a same-cycle
+  // crack is worth building combinationally for; INT pushes a comparable
+  // amount going the other direction. Revisit once decode exists -- REP-
+  // prefixed string ops (MOVS/STOS/CMPS/SCAS/LODS) are the other classic
+  // microcode candidates but aren't in x86_op_e yet.
+  function automatic logic is_microcoded(x86_op_e op);
+    unique case (op)
+      X86_IRET, X86_SYSCALL, X86_SYSRET, X86_INT: return 1'b1;
+      default:                                    return 1'b0;
+    endcase
+  endfunction
+
+  // --------------------------------------------------------------------
   // structure sizing -- every one of these is a guess
   // --------------------------------------------------------------------
   // ANCHORED: tb/tb_top.sv:30 used an 8-bit ROB index. Power of two so the
@@ -175,6 +219,15 @@ package cpu_pkg;
     logic [3:0] insn_len;   // bytes; 4 bits covers isa_pkg::MAX_INSN_LEN (15)
     logic       last_uop;   // final uop of the x86 insn -> retire boundary
 
+    // microcode sequencer origin -- see the "microcode sequencer" section
+    // above. ucode_last hands frontend arbitration back to the hardware
+    // cracker (UCODE_ACTIVE -> UCODE_IDLE); kept separate from last_uop
+    // (the ROB retire boundary) because today's one-routine-per-instruction
+    // sequencer always sets both together, but a sequencer with call/return
+    // between shared routines wouldn't.
+    logic       ucode_valid;
+    logic       ucode_last;
+
     // operation
     uop_op_e    op;
     fu_e        fu;
@@ -243,6 +296,12 @@ package cpu_pkg;
     cond_e      cc;
     logic       exc_valid;
     exc_vec_e   exc_vec;
+
+    // microcode hand-off -- set when is_microcoded(x86_op) is true. Decode
+    // stalls the hardware cracker and starts the sequencer at ucode_entry
+    // instead of producing uops directly this cycle.
+    logic       ucode_valid;
+    ucode_idx_t ucode_entry;
   } dec_insn_t;
 
   // --------------------------------------------------------------------

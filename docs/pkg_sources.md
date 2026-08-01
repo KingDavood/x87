@@ -109,6 +109,38 @@ Size them from your own IPC experiments.
 `FETCH_BUF_DEPTH=64` isn't Skylake-calibrated either; it's kept at 2x
 `FETCH_WIDTH`, the same ratio the 2-wide version used.
 
+### Microcode sequencer (added 2026-08-01)
+
+`UOPS_PER_INSN` caps what the combinational hardware crack can produce in one
+cycle. A few x86 instructions (`IRET`, `SYSCALL`, `SYSRET`, `INT`) do more
+architectural work than that's worth building combinationally for and need a
+multi-cycle sequencer stepping through a microcode ROM instead — this is the
+same split real x86 cores make between simple hardware decode and an MS-ROM.
+
+This is scaffolding only — no ROM contents, no `rtl/frontend` sequencer
+module yet:
+
+- `UCODE_ROM_DEPTH=128`, `UCODE_MAX_SEQ_LEN=8` — round-number guesses, same
+  "no justification" bucket as the rest of §4's placeholders.
+- `ucode_idx_t` — ROM entry index, width derived like every other `*_IDX_W`.
+- `ucode_seq_state_e` (`UCODE_IDLE`/`UCODE_ACTIVE`) — frontend arbitration
+  state: hardware cracker vs. sequencer driving the uop stream.
+- `is_microcoded(x86_op_e)` — the decode-time classification function.
+  **Deliberately lives in `cpu_pkg.sv`, not `isa_pkg.sv`**, even though it
+  switches on `x86_op_e`: the SDM doesn't mandate microcoding anything, so
+  which instructions get sequenced is an implementation choice like every
+  other guess in this file, not architecture. `isa_pkg.sv` only carries a
+  one-line comment next to `x86_op_e` pointing here.
+- `dec_insn_t.ucode_valid` / `.ucode_entry` — decode's hand-off to the
+  sequencer (set when `is_microcoded()` is true).
+- `uop_t.ucode_valid` / `.ucode_last` — per-uop sequencer origin.
+  `ucode_last` is kept distinct from `last_uop` (the ROB retire boundary):
+  today's one-routine-per-instruction sequencer always sets both together,
+  but a sequencer with call/return between shared routines wouldn't.
+
+Not yet covered: REP-prefixed string ops (`MOVS`/`STOS`/`CMPS`/`SCAS`/`LODS`)
+are classic microcode candidates but aren't in `x86_op_e` at all yet.
+
 ### Structural choices
 
 The shape of `uop_t` / `rob_entry_t` follows textbook R10000-style out-of-order
@@ -178,3 +210,8 @@ Microarchitectural:
 - **Compile order.** `isa_pkg.sv` → `cpu_pkg.sv` → `mem_pkg.sv`. `cpu_pkg`
   imports `isa_pkg`; memory-side request/response structs belong in `mem_pkg`,
   not `cpu_pkg`.
+- **Microcode sequencer has no ROM or RTL yet.** §4's "Microcode sequencer"
+  section added the interface shape (`ucode_idx_t`, `ucode_seq_state_e`,
+  `is_microcoded()`, the `dec_insn_t`/`uop_t` hand-off fields) but there's no
+  `rtl/frontend` sequencer module consuming them and `UCODE_ROM_DEPTH` has no
+  actual microcode routines behind it.
