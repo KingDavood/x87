@@ -9,7 +9,7 @@ module opcode_rom#(
     input mode_t mode,
     input uop_metadata_t uops,
     output logic [FETCH_WIDTH-1:0]  instr_len,
-    output uop_t uop_out);
+    output uop_t [3:0] uop_out);
 
 
 endmodule

@@ -271,6 +271,21 @@ package cpu_pkg;
   localparam int UOP_WIDTH = $bits(uop_t);
 
   // --------------------------------------------------------------------
+  // opcode identity result -- length_decode/opcode_rom's answer to "what
+  // instruction is this, or did we fail to recognize it at all."
+  //
+  // Deliberately name-only: no registers, immediates, or addressing --
+  // those don't exist yet at this point in the pipeline (modrm/sib/imm
+  // haven't been resolved). `op` reuses isa_pkg::x86_op_e as-is -- no
+  // separate value mapping here, the enum's names are the whole point.
+  // `valid=0` is the #UD case: opcode byte(s) didn't match any table entry.
+  // --------------------------------------------------------------------
+  typedef struct packed {
+    logic    valid;  // 0 => unrecognized opcode (#UD), op is meaningless
+    x86_op_e op;
+  } uop_metadata_t;
+
+  // --------------------------------------------------------------------
   // decoded-but-not-renamed instruction (decode -> rename boundary)
   //
   // Mirrors the x86 instruction format field-for-field, so this struct is

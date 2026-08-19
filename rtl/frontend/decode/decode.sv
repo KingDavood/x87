@@ -30,6 +30,33 @@ module prefix_decode #(
 
 endmodule
 
+module length_decode
+#( parameter MAX_BYTE_WIDTH = 32,
+   parameter MAX_OPCODE_LENGTH = 3)
+(
+  input logic clk,
+  input logic rst_n,
+  input logic [MAX_BYTE_WIDTH-1:0]bytes [3:0], // TODO: Fix sizing eventually
+);
+
+  localparam OPCODE_LENGTH = 8 * MAX_OPCODE_LENGTH;
+  logic [5:0] byte_pos;
+  logic [OPCODE_LENGTH-1:0] op_code;
+
+  always_comb begin
+    byte_pos = 0;
+
+    for(int i = 0; i < MAX_BYTE_WIDTH; i++) begin
+      if(is_prefix(bytes[i]) || is_legacy_prefix(bytes[i])) begin
+        bytes_pos += 1;
+      end
+    end
+
+    // todo get op code
+
+  end
+
+endmodule
 // ### `x87_imm_extract`
 // - **Role:** pull the immediate and size it.
 // - **In:** bytes (post-disp), `imm_kind`, `operand_size`. **Out:** `imm` (extended), `imm_len`.
