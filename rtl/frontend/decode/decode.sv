@@ -34,26 +34,62 @@ module length_decode
 #( parameter MAX_BYTE_WIDTH = 32,
    parameter MAX_OPCODE_LENGTH = 3)
 (
-  input logic clk,
-  input logic rst_n,
-  input logic [MAX_BYTE_WIDTH-1:0]bytes [3:0], // TODO: Fix sizing eventually
+  input  logic clk,
+  input  logic rst_n,
+  input  mode_t mode,
+  input  logic [MAX_BYTE_WIDTH*8-1:0]bytes, // TODO: Fix sizing eventually
+  output logic op_code,
+  output logic op_code_len,
+  output logic pfx_len
+  output logic interrupt,
 );
 
   localparam OPCODE_LENGTH = 8 * MAX_OPCODE_LENGTH;
   logic [5:0] byte_pos;
+  logic not_done;
   logic [OPCODE_LENGTH-1:0] op_code;
+
+  // https://wiki.osdev.org/X86-64_Instruction_Encoding
+  function automatic logic is_legacy_prefix(logic [7:0] byte);
+    case (byte)
+      PFX_LOCK, PFX_REPNE, PFX_REP, PFX_OPSIZE, PFX_ADDRSIZE,
+      PFX_SEG_ES, PFX_SEG_CS, PFX_SEG_SS, PFX_SEG_DS, PFX_SEG_FS, PFX_SEG_GS: return 1'b1;
+      default: return 1'b0;
+    endcase
+  endfunction
+
+  // find amd thingy
+  function automatic logic is_prefix(logic [7:0] byte);
+  // need some more inputs
+    always_comb begin
+      if(mode == REAL)begin
+        
+      end else if(mode == PROTECTED) begin
+        
+      end else if(mode == BIT_64)begin
+        
+      end else if(mode == VIRTUAL8086) begin
+        
+      end else if(mode == COMPATIBILITY) begin
+        
+      end
+      
+    end
+  endfunction
 
   always_comb begin
     byte_pos = 0;
+    not_done = 1;
 
     for(int i = 0; i < MAX_BYTE_WIDTH; i++) begin
-      if(is_prefix(bytes[i]) || is_legacy_prefix(bytes[i])) begin
+      if(not_done && 
+      (is_prefix(bytes[i]) || is_legacy_prefix(bytes[(i+1)*8:i*8]))) begin
         bytes_pos += 1;
       end
+      else begin
+        not_done = 0;
+      end
     end
-
-    // todo get op code
-
   end
 
 endmodule
