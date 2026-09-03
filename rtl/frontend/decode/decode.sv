@@ -31,13 +31,14 @@ module prefix_decode #(
 endmodule
 
 module length_decode
-#( parameter MAX_BYTE_WIDTH = 32,
+#( parameter MAX_BYTE_WIDTH = 1,
    parameter MAX_OPCODE_LENGTH = 3)
 (
   input  logic clk,
   input  logic rst_n,
   input  mode_t mode,
   input  logic [MAX_BYTE_WIDTH*8-1:0]bytes, // TODO: Fix sizing eventually
+  input  logic op_cache_hit,
   output logic [MAX_OPCODE_LENGTH*8-1:0] op_code,
   output logic [1:0]                     op_code_len,
   output logic [5:0]                     pfx_len,
@@ -126,6 +127,64 @@ module length_decode
       addrSize = ADDR64;
     end
 
+    if(!op_cache_hit) begin
+      // predict 1 byte
+
+      // predict 1 byte and ok
+      op_code = byte[0];
+      op_code_len = '1;
+      pfx_len = '0;
+      interrupt_G = '0;
+
+
+      // This is going to be 3
+      for(int i = 0; i < MAX_BYTE_WIDTH; i++) begin
+        // OPTIONS:
+        // - Check for if_prefix until you find nonprefix(assume its then the op_code or rex)
+        // - Check for if 
+        // - Guess 1 byte at a time
+        // First half is checking legacy prefix stuff
+        // 2nd Half is Rex
+        // VEX or EVEX, and which escape sequence you see for which opcode map
+        // OPCode rom look up for modrm/not
+        // same with sib
+        // 3-5 cycle length decode / lookup of instruction into mico-op rom for conversion
+        // then into dispatch queue
+
+        // Assume for now it's checking the whole fetch window
+        // Will need to stick multiple stages together when we divide and conquer later 
+        logic [MAX_STAGE_BIT_CHECK-1:0] is_legacy;
+        logic [MAX_STAGE_BIT_CHECK-1:0] stop_at;
+        logic in_legacy;
+        
+        is_legacy[i] = is_legacy_prefix(bytes[(i+1)*8:i*8]);
+        stop_at[i] = in_legacy && !is_legacy(bytes[i]);
+        in_legacy = in_legacy && is_legacy[i];
+
+        
+        // if (should you check for rex)
+          // for loop rex
+
+        // if legacy or rex
+      end
+      
+      logic [4:0] pfx_length;
+      pfx_length = 0;
+      for(int i = 0; i < MAX_BYTE_WIDTH; i++) begin
+        if(stop_at[i]) begin
+          pfx_length = i;
+        end
+      end
+
+      classify_t type;
+      type = classify(bytes[(pfx_length + 3)*8:pfx_length*8])
+
+    // if(not_done &&
+    // (is_prefix(bytes[i]) || is_legacy_prefix(bytes[(i+1)*8:i*8]))) begin
+    //   byte_pos += 1;
+    // end 
+    end
+
     // Immediate classes (op-size = latched op-size unless mandatory-66):
     // none
     // ib = 1
@@ -157,20 +216,6 @@ module length_decode
       combined = 1;
     end
       
-
-    for(int i = 0; i < MAX_BYTE_WIDTH; i++) begin
-      if(not_done &&
-      (is_prefix(bytes[i]) || is_legacy_prefix(bytes[(i+1)*8:i*8]))) begin
-        byte_pos += 1;
-      end
-
-  
-
-
-      else begin
-        not_done = 0;
-      end
-    end
 
     if(mode == MODE32 && seen_66) begin
       opSize = OP16;
@@ -859,15 +904,6 @@ module opcode_table(
   end
 
 endmodule
-
-
-
-
-
-
-
-
-
 // ------------------------------------------------------------------
 // opcode_invalid_table -- the #UD/reserved-slot check, split out of
 // opcode_table so it can be pipelined separately from the (larger)
@@ -955,6 +991,163 @@ module opcode_invalid_table(
 
 endmodule
 
+//============================================================================
+// x86_decode_state.sv
+// Instruction-encoding FSM states, per AMD64 APM Vol 3, Figure 1-1
+// "Instruction Encoding Syntax".
+//
+// Constraints from the figure (not encoded as states, enforce in logic):
+//   Note 1: REX is not allowed with VEX/XOP encodings.
+//   Note 3: total instruction length <= 15 bytes.
+//   Note 4: an 8-byte immediate implies no displacement, and vice versa.
+//   Legacy: up to 4 legacy prefixes -> loop on ST_LEGACY_PREFIX w/ a counter.
+//============================================================================
+package x86_decode_pkg;
+
+  typedef enum logic [4:0] {
+    //-- Entry / prefix bytes ------------------------------------------------
+    ST_START          = 5'h00,  // reset / begin next instruction
+    ST_LEGACY_PREFIX  = 5'h01,  // <= 4 legacy prefixes
+    ST_REX_PREFIX     = 5'h02,  // single REX byte (long mode)
+
+    //-- Escape / VEX / XOP routing after prefixes ---------------------------
+    ST_0F_ESCAPE      = 5'h03,  // 0Fh escape; also gates 3DNow! and 38h/3Ah
+    ST_38_ESCAPE      = 5'h04,  // 0F 38h three-byte escape
+    ST_3A_ESCAPE      = 5'h05,  // 0F 3Ah three-byte escape
+    ST_VEX_C5         = 5'h06,  // C5h: 2-byte VEX prefix
+    ST_VEX_C4         = 5'h07,  // C4h: 3-byte VEX prefix
+    ST_XOP            = 5'h08,  // 8Fh: XOP prefix
+
+    //-- VEX / XOP payload bytes ---------------------------------------------
+    ST_VEX_C5_B1      = 5'h09,  // R.vvvv.L.pp
+    ST_VEX_C4_B1      = 5'h0A,  // RXB.map_sel
+    ST_VEX_C4_B2      = 5'h0B,  // W.vvvv.L.pp
+    ST_XOP_B1         = 5'h0C,  // RXB.map_sel
+    ST_XOP_B2         = 5'h0D,  // W.vvvv.L.pp
+
+    //-- Opcode maps ---------------------------------------------------------
+    ST_MAP_PRIMARY    = 5'h0E,  // primary (1-byte) opcode map
+    ST_MAP_SECONDARY  = 5'h0F,  // secondary (0F) opcode map
+    ST_MAP_0F_38      = 5'h10,  // 0F_38h opcode map
+    ST_MAP_0F_3A      = 5'h11,  // 0F_3Ah opcode map
+    ST_MAP_3DNOW      = 5'h12,  // 3DNow! map; opcode is a SUFFIX byte (post-operand)
+    ST_MAP_VEX_1      = 5'h13,  // map_sel = 01h
+    ST_MAP_VEX_2      = 5'h14,  // map_sel = 02h
+    ST_MAP_VEX_3      = 5'h15,  // map_sel = 03h
+    ST_MAP_XOP_8      = 5'h16,  // map_sel = 08h
+    ST_MAP_XOP_9      = 5'h17,  // map_sel = 09h
+    ST_MAP_XOP_A      = 5'h18,  // map_sel = 0Ah
+
+    //-- Shared tail (ModRM path) --------------------------------------------
+    ST_MODRM          = 5'h19,
+    ST_SIB            = 5'h1A,
+    ST_DISP           = 5'h1B,  // 1/2/4/8-byte displacement
+    ST_IMM            = 5'h1C,  // 1/2/4/8-byte immediate
+    ST_END            = 5'h1D   // instruction complete
+  } decode_state_e;
+
+  // VEX/XOP map_select field encodings (the map=NNh labels in the figure).
+  typedef enum logic [4:0] {
+    MAP_VEX_01 = 5'h01,
+    MAP_VEX_02 = 5'h02,
+    MAP_VEX_03 = 5'h03,
+    MAP_XOP_08 = 5'h08,
+    MAP_XOP_09 = 5'h09,
+    MAP_XOP_0A = 5'h0A
+  } map_select_e;
+
+endpackage : x86_decode_pkg
+
+
+
+module prefix_scan_fsm
+#(parameter MAX_BYTE_WIDTH = 32,
+  parameter MAX_INSTR_WIDTH = 15
+  parameter MAX_PREFIXES = 4,
+)
+(
+  input  logic clk,
+  input  logic rst_n,
+  input  logic [MAX_INSTR_WIDTH*8-1:0] bytes,
+  input  mode_e   mode,  
+  output prefix_t [MAX_PREFIXES-1:0] prefixes,
+  output logic done
+);
+
+
+
+
+always_ff @(posedge clk, negedge rst_n) begin
+  if(!rst_n) begin
+    current_state <= IDLE;
+  end else begin
+    current_state <= next_state;
+  end
+end
+
+always_comb begin
+  current_state = next_state;
+  case(current_state):
+  endcase
+end
+
+  
+
+endmodule
+
+module LOAD_WEIGHTS_FSM(
+    input logic clk,
+    input logic rst_n,
+    input logic has_seen_opcode,
+    input logic legacy_prefix_count,
+    input logic has_seen_legacy_prefix,
+    input logic has_seen_prefix,
+    input logic full_weights);
+
+    typedef enum logic [5:0] {LEGACY_PREFIX, PREFIX, OPCODE, DISPLACMENT, IMMEDIATE} state_t;
+    state_t current_state, next_state;
+
+    always_ff @(posedge clk, negedge rst_n) begin
+        if(!rst_n) begin
+            current_state <= LEGACY_PREFIX;
+        end else begin
+            current_state <= next_state;
+        end
+    end
+    
+    always_comb begin
+        next_state = current_state;
+        we_weights = 1'd0;
+        clr = 1'd0;
+        busy = 1'd0;
+        case(current_state)
+            IDLE: begin
+                if(has_seen_opcode) begin
+                  next_state = OPCODE;
+                end else if(has_seen_prefix) begin
+                  next_state = PREFIX;
+                end else if(!has_seen_opcode && !has_seen_legacy_prefix && !max_legacy_prefix_cnt) begin
+                  next_state = LEGACY_PREFIX;
+                  legacy_prefix_inc = 1;
+                  in_legacy_prefix = 1;
+                end 
+            end
+            LOAD_WEIGHTS: begin
+                if(!full_weights) begin
+                    next_state = LOAD_WEIGHTS;
+                    we_weights = 1'd1;
+                    busy = 1'd1;
+                end else begin
+                    next_state = DONE;
+                end
+            end
+            DONE: begin
+                next_state = IDLE;
+            end
+        endcase
+    end
+endmodule
+
 
 // For length_decode specifically, the table just needs to answer "how many bytes does this opcode occupy, and what comes after it" — it doesn't need the full instruction-identity payload that opcode_rom/cracking wants.
 
@@ -972,3 +1165,34 @@ endmodule
 // imm_kind — none/ib/iw/iz/io/iw_ib, feeds the immediate-size block
 // def64 — whether this opcode forces 64-bit operand size in long mode regardless of prefixes (CALL/PUSH/POP/Jcc-style), needed to size iz/io correctly
 // The doc's guidance (§2, x87_ilen_dec) is explicit that this should be the same table opcode_rom uses for cracking — just add the extra fields (uop_template, flags_wr, group_id, etc.) that length_decode ignores — rather than building a second lookup that can drift out of sync with the first.
+
+
+
+// ADD/SUB/logic/shift/rotate/MOV/LEA/MUL/DIV/LOAD/STORE/branches/SETcc/CMOVcc covers the "protected-mode integer subset" the doc scopes for first. A few things from that list don't need new uops at all — worth naming so you don't over-build:
+
+// PUSH/POP → crack into existing UOP_SUB/UOP_ADD (rsp adjust) + UOP_LOAD/UOP_STORE, per the doc's own cracking example.
+// XCHG reg,reg → two UOP_MOVs through a temp (or move-elimination, see below). XCHG mem,reg is the harder one — it's implicitly locked (atomic) even without a LOCK prefix, so it wants the same atomicity primitive as CMPXCHG, not a bespoke uop.
+// LOOP/LOOPE/LOOPNE → decrement + test + UOP_JCC, no new primitive needed.
+
+
+//1. Read prefxies -> x86 specific not 66, 67, REX
+// // i. READ all prefixes carre about 66, 67, REX
+//2. Then measure 1 insturction length -> add up everything : prefixes + opcode + modrm + sib + displacement + immediate = a number.
+// // i. SIB byte isn't counted. The sib flag gets set in the ModRM case logic, but nothing adds a byte for it, and nothing implements 
+// //ii. No final length output at all. This is the one that stands out most given the module's name: length_decode's outputs are op_code, op_code_len, pfx_len, interrupt_GP —  bytes + ModRM(1) + SIB(0/1) + displacement + immediate into a total.
+//3. Find when instructions starts -> Koggestone shit do in parallel for all instructions
+// // i. 
+//3.5 What is going on with each instruciton
+// // i. opcode table 
+
+//5ish. Not the other microp path
+
+they are in plain words:
+
+Box A — read the prefixes. Look at the front of an instruction, count the prefix bytes (66, 67, REX, etc.), note what they mean. Small, x86-specific.
+
+Box B — measure one instruction's length. Add up the field sizes: prefixes + opcode + modrm + sib + displacement + immediate = a number. Also x86-specific. Uses A's output. This is NOT the scan. It's just adding widths at one spot.
+
+Box C — find where instructions start. Take the length numbers from B and hop: 0 → 0+len → ... This is the only box that uses Kogge-Stone, and it doesn't know or care that it's x86. It's just numbers.
+
+Box D — actually decode the instruction into uops. Runs only on the real starts that C found.
