@@ -60,6 +60,37 @@ module decode
     endcase
   endfunction
 
+  //these wi
+  function automatic logic is_legacy_prefix(logic [14:0][7:0]prefix_bytes, logic [6:0] prefix_length);
+    logic [6:0] prefix_output_vector;
+    for(int i = 0; i < prefix_length; i++) begin
+      case(prefix_bytes[i])
+        8'h66: begin
+          prefix_output_vector[0] = 1; 
+        end
+        8'h67: begin
+          prefix_output_vector[1] = 1;
+        end
+        F2: begin
+          prefix_output_vector[2] = 1;
+        end
+        F3: begin
+          prefix_output_vector[3] = 1;
+        end
+        REX: begin
+          prefix_output_vector[4] = 1;
+        end
+        VEX: begin
+          prefix_output_vector[5] = 1;
+        end
+        XOP: begin
+          prefix_output_vector[6] = 1;
+        end
+      endcase
+    end
+  endfunction
+
+
 
   //Some FSM to figure where are what and what we are looking at
   //We don't know what what looking and don't what to clear
@@ -73,17 +104,54 @@ module decode
   //IMMEDIATE
       
   
-  always_ff @(posedge clk, negedge rst_n) begin
-    if(!rst_n) begin
-      num <= 0;
-      start_positions <= `{default: 0};
-    end else begin
-      
-      for(int i = 0; i < MAX_BYTE_WIDTH; i = i + 1) begin
-      
-    end
-  end
+      // 1. Internal wire to hold the immediately computed compressed result
+    logic [15:0][3:0] vector_in;
 
+    // 2. Combinational Block: Calculates the routing matrix
+    //
+    always_comb begin
+        int write_ptr;   
+        compressed_next = '0; 
+        write_ptr       = 0;
+        for(int i = 0 ; i < 16; i++) begin
+          if(byte_flags[i][0]) begin
+            vector_in[i] = i;
+          end
+        end
+        for (int i = 0; i < 16; i++) begin
+            if (vector_in[i] != 4'd0) begin
+                if (write_ptr < 4) begin
+                    statr_positions[write_ptr] = vector_in[i];
+                    write_ptr++;
+                end
+            end
+        end
+    end
+
+  genvar lane;
+  generate
+    for(lane = 0; lane < 4; lane++) begin
+      if(lane == 0) begin
+        //loop until we get 1st position
+        instr_len_0 = //0 - 1st
+        opcode_byte_0 = //whatever is between 0 - 1
+        for(int i = 0; i < instr_len_0; i++) begin
+          // prefixes, REX, 66, 67 everything else meta_data
+          // 
+        end
+      end
+      else if(lane == 1) begin
+        //loop until we get to 2nd position
+        instr_len_1 = //1st - 2nd
+      end
+      else if(lane == 2) begin
+        //loop until we get to 3rd position
+        instr_len_2 =  //2nd - 3rd
+      end else if(lane == 3) begin
+        //loop until we find the next whatever
+      end
+    end
+  endgenerate
 
   always_comb begin
     byte_pos = 0;
@@ -106,10 +174,7 @@ module decode
       // This is going to be 3
     for(int i = 0; i < MAX_BYTE_WIDTH; i = i + 1) begin
 
-     x[i] = (byte_flags[i][0] & 1) ???? i = i;
-     loop by x
-        if(!=0 )
-      pos 
+    
     if(is_modrm) begin
       if(addr64 || addr32) begin
         case(mod)
